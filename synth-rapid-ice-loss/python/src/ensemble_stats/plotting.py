@@ -8,16 +8,161 @@
 
 # OpenAI ChatGPT was used to assist with aspects of code development and refinement.
 
-
+from dataclasses import dataclass
+from typing import Mapping, Optional
 
 import matplotlib.pyplot as plt
 import numpy as np
+
+
+@dataclass(frozen=True)
+class PlotMetadata:
+    """
+    Labels and units used by plotting helpers.
+
+    Any field left as None is inferred from xarray metadata where possible,
+    then falls back to a generic label.
+    """
+
+    variable_label: Optional[str] = None
+    units: Optional[str] = None
+    time_label: Optional[str] = None
+    group_label: Optional[str] = None
+    member_label: Optional[str] = None
+
+
+def _attrs_from(obj):
+    """Return xarray-style attrs, or an empty mapping."""
+    return getattr(obj, "attrs", {}) or {}
+
+
+def _attr_label(obj):
+    attrs = _attrs_from(obj)
+    return (
+        attrs.get("long_name")
+        or attrs.get("standard_name")
+        or attrs.get("source_long_name")
+        or attrs.get("source_variable")
+        or getattr(obj, "name", None)
+    )
+
+
+def _attr_units(obj):
+    attrs = _attrs_from(obj)
+    return attrs.get("units") or attrs.get("source_units")
+
+
+def _resolve_plot_metadata(
+    source=None,
+    metadata=None,
+    variable_label=None,
+    units=None,
+    time_label=None,
+    group_label=None,
+    member_label=None,
+):
+    """Resolve explicit labels, metadata object/dict, and xarray attrs."""
+    if metadata is None:
+        metadata = PlotMetadata()
+    elif isinstance(metadata, Mapping):
+        metadata = PlotMetadata(**metadata)
+    elif not isinstance(metadata, PlotMetadata):
+        raise TypeError("metadata must be a PlotMetadata, mapping, or None")
+
+    return PlotMetadata(
+        variable_label=(
+            variable_label
+            or metadata.variable_label
+            or _attr_label(source)
+            or "Data value"
+        ),
+        units=(
+            units
+            if units is not None
+            else metadata.units
+            if metadata.units is not None
+            else _attr_units(source)
+        ),
+        time_label=(
+            time_label
+            or metadata.time_label
+            or "Time"
+        ),
+        group_label=(
+            group_label
+            or metadata.group_label
+            or "Group"
+        ),
+        member_label=(
+            member_label
+            or metadata.member_label
+            or "Member"
+        ),
+    )
+
+
+def _label_with_units(label, units):
+    if units:
+        return f"{label} ({units})"
+    return label
+
+
+def _squared_units(units):
+    if units:
+        return f"({units})^2"
+    return None
+
+
+def _variance_axis_label(label, metadata):
+    return _label_with_units(label, _squared_units(metadata.units))
+
+
+def _component_variance_label(symbol, metadata):
+    units = _squared_units(metadata.units)
+    if units:
+        return f"{symbol} ({units})"
+    return symbol
+
+
+def _format_time_tick(value):
+    if hasattr(value, "year"):
+        return f"{value.year:04d}"
+
+    if isinstance(value, (int, float, np.integer, np.floating)):
+        return str(value)
+
+    try:
+        year = np.datetime64(value, "Y").astype(int) + 1970
+    except (TypeError, ValueError):
+        return str(value)
+
+    return f"{year:04d}"
+
+
+def _year_from_time(value):
+    if hasattr(value, "year"):
+        return int(value.year)
+
+    if isinstance(value, (int, float, np.integer, np.floating)):
+        return None
+
+    try:
+        return int(np.datetime64(value, "Y").astype(int) + 1970)
+    except (TypeError, ValueError):
+        return None
 
 
 def plot_STL_decomposition(
     ds_stl,
     t_dim="time",
     aspect=0.4,
+    metadata=None,
+    variable_label=None,
+    units=None,
+    time_label=None,
+    title=None,
+    residual_overlay_offset=None,
+    residual_overlay_label=None,
 ):
     """
     Plot STL decomposition components of the grand ensemble-mean.
@@ -33,6 +178,17 @@ def plot_STL_decomposition(
         Name of temporal dimension.
     aspect : float, optional
         Axes box aspect ratio.
+    metadata : PlotMetadata or dict, optional
+        Labels and units for plot text. If omitted, xarray attrs are used.
+    variable_label, units, time_label : str, optional
+        Explicit overrides for metadata-derived labels.
+    title : str, optional
+        Figure title override.
+    residual_overlay_offset : float, optional
+        If provided, plot the residual shifted by this value on the
+        trend-plus-seasonal panel and draw a reference line at the offset.
+    residual_overlay_label : str, optional
+        Legend label for the shifted residual overlay.
 
     Returns
     -------
@@ -45,8 +201,19 @@ def plot_STL_decomposition(
     seasonal = ds_stl.STL_seasonal
     resid = ds_stl.STL_resid
 
+    plot_meta = _resolve_plot_metadata(
+        ds_stl,
+        metadata=metadata,
+        variable_label=variable_label,
+        units=units,
+        time_label=time_label,
+    )
+    value_label = _label_with_units(
+        plot_meta.variable_label,
+        plot_meta.units,
+    )
+
     trend_plus_seasonal = trend + seasonal
-    alert = resid + 1
 
     # Create figure
     fig, axes = plt.subplots(2, 2, figsize=(15, 10))
@@ -71,14 +238,25 @@ def plot_STL_decomposition(
         label="trend + seasonal",
     )
 
-    alert.plot(
+    residual_offset = (
+        0.0
+        if residual_overlay_offset is None
+        else residual_overlay_offset
+    )
+    default_residual_label = (
+        "residual"
+        if residual_offset == 0
+        else f"residual + {residual_offset:g}"
+    )
+    residual_overlay = resid + residual_offset
+    residual_overlay.plot(
         ax=axes[1, 0],
         color="grey",
-        label="residual + $10^6$ km$^2$",
+        label=residual_overlay_label or default_residual_label,
     )
 
     axes[1, 0].axhline(
-        y=1,
+        y=residual_offset,
         color="red",
         linestyle="dotted",
         linewidth=1,
@@ -106,14 +284,17 @@ def plot_STL_decomposition(
     # Shared formatting
     # ------------------------------------------------------
     for ax in axes.flat:
-        ax.set_xlabel("year")
-        ax.set_ylabel("Sea-ice extent ($10^6$ km$^2$)")
+        ax.set_xlabel(plot_meta.time_label)
+        ax.set_ylabel(value_label)
         ax.set_box_aspect(aspect)
 
     # Overall title
     fig.suptitle(
-        "Temporal components of the grand ensemble-mean,\n"
-        "monthly-mean Arctic sea-ice extent ($10^6$ km$^2$)",
+        title
+        or (
+            "Temporal components of the grand ensemble-mean,\n"
+            f"{value_label}"
+        ),
         fontsize=14,
     )
 
@@ -129,6 +310,13 @@ def plot_groups_members(
     j_dim="j",
     k_dim="k",
     t_dim="time",
+    metadata=None,
+    variable_label=None,
+    units=None,
+    time_label=None,
+    group_label=None,
+    member_label=None,
+    title=None,
 ):
     """
     Plot hierarchical ensemble-member timeseries and highlight
@@ -146,6 +334,12 @@ def plot_groups_members(
         Index of highlighted child member.
     j_dim, k_dim, t_dim : str, optional
         Names of group, member, and temporal dimensions.
+    metadata : PlotMetadata or dict, optional
+        Labels and units for plot text.
+    variable_label, units, time_label, group_label, member_label : str, optional
+        Explicit overrides for metadata-derived labels.
+    title : str, optional
+        Plot title override.
 
     Returns
     -------
@@ -160,6 +354,19 @@ def plot_groups_members(
 
     # Subset in time
     g_subset = g.isel({t_dim: slice(0, ntimes)})
+    plot_meta = _resolve_plot_metadata(
+        g,
+        metadata=metadata,
+        variable_label=variable_label,
+        units=units,
+        time_label=time_label,
+        group_label=group_label,
+        member_label=member_label,
+    )
+    value_label = _label_with_units(
+        plot_meta.variable_label,
+        plot_meta.units,
+    )
 
     # Highlighted indices
     j_highlight = jsel
@@ -213,11 +420,12 @@ def plot_groups_members(
     )
 
     ax.set_title(
-        f"First {ntimes} samples of hierarchical ensemble dataset"
+        title
+        or f"First {ntimes} samples of hierarchical ensemble dataset"
     )
 
-    ax.set_xlabel(t_dim)
-    ax.set_ylabel("Data value")
+    ax.set_xlabel(plot_meta.time_label)
+    ax.set_ylabel(value_label)
 
     ax.grid(True)
 
@@ -230,14 +438,14 @@ def plot_groups_members(
             color=colors[j],
             lw=3 if j == j_highlight else 2,
             alpha=1.0 if j == j_highlight else 0.6,
-            label=f"{j_dim}={j}",
+            label=f"{plot_meta.group_label}={j}",
         )
         for j in range(g_subset.sizes[j_dim])
     ]
 
     legend1 = ax.legend(
         handles=legend_handles,
-        title="Groups",
+        title=plot_meta.group_label,
         loc="lower right",
     )
 
@@ -251,8 +459,8 @@ def plot_groups_members(
         linestyle=":",
         label=(
             f"Selected member "
-            f"({j_dim}={j_highlight}, "
-            f"{k_dim}={k_highlight})"
+            f"({plot_meta.group_label}={j_highlight}, "
+            f"{plot_meta.member_label}={k_highlight})"
         ),
     )
 
@@ -281,12 +489,33 @@ def plot_preprocessing_components(
     j_dim="j",
     k_dim="k",
     t_dim="t",
+    metadata=None,
+    variable_label=None,
+    units=None,
+    time_label=None,
+    group_label=None,
+    member_label=None,
+    title=None,
 ):
     """
     Plot preprocessing effects on:
     (1) the grand-ensemble mean; and
     (2) one example ensemble member.
     """
+
+    plot_meta = _resolve_plot_metadata(
+        g,
+        metadata=metadata,
+        variable_label=variable_label,
+        units=units,
+        time_label=time_label,
+        group_label=group_label,
+        member_label=member_label,
+    )
+    value_label = _label_with_units(
+        plot_meta.variable_label,
+        plot_meta.units,
+    )
 
     grand_ensemble_mean = g.mean(dim=[j_dim, k_dim])
     grand_mean_detrended = g_detrended.mean(dim=[j_dim, k_dim])
@@ -333,9 +562,10 @@ def plot_preprocessing_components(
     )
 
     axes[0].set_title(
-        "Effect of preprocessing on grand-ensemble mean"
+        title
+        or "Effect of preprocessing on grand-ensemble mean"
     )
-    axes[0].set_ylabel("Grand-ensemble mean before and after preprocessing steps")
+    axes[0].set_ylabel(f"Grand-ensemble mean {value_label}")
     axes[0].legend()
 
     # ----------------------------------------------------------
@@ -344,7 +574,11 @@ def plot_preprocessing_components(
     axes[1].plot(
         example_member_original[t_dim],
         example_member_original,
-        label=f"Original member ({j_dim}={j_example}, {k_dim}={k_example})",
+        label=(
+            f"Original member "
+            f"({plot_meta.group_label}={j_example}, "
+            f"{plot_meta.member_label}={k_example})"
+        ),
     )
 
     axes[1].plot(
@@ -369,8 +603,8 @@ def plot_preprocessing_components(
     axes[1].set_title(
         "Effect of preprocessing on an example ensemble member"
     )
-    axes[1].set_xlabel("Time")
-    axes[1].set_ylabel("Member before and after preprocessing steps")
+    axes[1].set_xlabel(plot_meta.time_label)
+    axes[1].set_ylabel(f"Member {value_label}")
     axes[1].legend()
 
     plt.tight_layout()
@@ -387,15 +621,49 @@ def plot_preprocessing_components(
 def plot_normalised_variance(
     normalised_variance_original,
     normalised_variance_residual,
-    t_dim="time"):
+    t_dim="time",
+    metadata=None,
+    variable_label=None,
+    time_label=None,
+    title=None,
+):
     """Plot normalised grand-ensemble variance diagnostics through time."""
+    plot_meta = _resolve_plot_metadata(
+        normalised_variance_original,
+        metadata=metadata,
+        variable_label=variable_label,
+        time_label=time_label,
+    )
+    variable_text = plot_meta.variable_label
     fig, ax = plt.subplots(figsize=(10, 5))
 
-    normalised_variance_original.plot(ax=ax, label="Normalised grand-ensemble variance of g", alpha=0.5, color='red')
-    normalised_variance_residual.plot(ax=ax, label="Normalised grand-ensemble variance of residual component of g", alpha=1, color='grey',linewidth=1)
+    normalised_variance_original.plot(
+        ax=ax,
+        label=f"Normalised grand-ensemble variance of {variable_text}",
+        alpha=0.5,
+        color='red',
+    )
+    normalised_variance_residual.plot(
+        ax=ax,
+        label=(
+            "Normalised grand-ensemble variance of "
+            f"preprocessed {variable_text}"
+        ),
+        alpha=1,
+        color='grey',
+        linewidth=1,
+    )
 
     ax.legend()
-    ax.set_title("Pre- and post-processed grand-ensemble variance timeseries, normalised by their time-mean variance")
+    ax.set_xlabel(plot_meta.time_label)
+    ax.set_ylabel("Normalised variance")
+    ax.set_title(
+        title
+        or (
+            "Pre- and post-processed grand-ensemble variance timeseries, "
+            "normalised by their time-mean variance"
+        )
+    )
 
     plt.tight_layout()
 
@@ -405,7 +673,25 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.stats import gaussian_kde
 
-def plot_distribution_comparison(g_original, g_preprocessed, bins=40):
+def plot_distribution_comparison(
+    g_original,
+    g_preprocessed,
+    bins=40,
+    metadata=None,
+    variable_label=None,
+    units=None,
+    title=None,
+):
+    plot_meta = _resolve_plot_metadata(
+        g_original,
+        metadata=metadata,
+        variable_label=variable_label,
+        units=units,
+    )
+    value_label = _label_with_units(
+        plot_meta.variable_label,
+        plot_meta.units,
+    )
     fig, ax = plt.subplots(figsize=(10, 5))
 
     # Flatten data
@@ -448,7 +734,8 @@ def plot_distribution_comparison(g_original, g_preprocessed, bins=40):
     ax.plot(xs, kde2(xs), linewidth=2, color="green", label="Preprocessed PDF (Gaussian KDE)")
 
     ax.legend()
-    ax.set_title("Distribution comparison")
+    ax.set_title(title or "Distribution comparison")
+    ax.set_xlabel(value_label)
     ax.set_ylabel("Density")
 
     plt.tight_layout()
@@ -457,7 +744,22 @@ def plot_distribution_comparison(g_original, g_preprocessed, bins=40):
 
 
 
-def plot_variance_decomposition_timeseries(results, t_coord=None):
+def plot_variance_decomposition_timeseries(
+    results,
+    t_coord=None,
+    metadata=None,
+    variable_label=None,
+    units=None,
+    time_label=None,
+    title=None,
+):
+    plot_meta = _resolve_plot_metadata(
+        results,
+        metadata=metadata,
+        variable_label=variable_label,
+        units=units,
+        time_label=time_label,
+    )
     fig, ax = plt.subplots(figsize=(12, 5))
 
     for col in [
@@ -467,17 +769,33 @@ def plot_variance_decomposition_timeseries(results, t_coord=None):
         "total_variance",
     ]:
         if col in results:
-            ax.plot(results[col], label=col)
+            if t_coord is None:
+                ax.plot(results[col], label=col)
+            else:
+                ax.plot(t_coord, results[col], label=col)
 
     ax.legend()
-    ax.set_title("Variance decomposition through time")
+    ax.set_xlabel(plot_meta.time_label)
+    ax.set_ylabel(_variance_axis_label("Variance", plot_meta))
+    ax.set_title(title or "Variance decomposition through time")
 
     plt.tight_layout()
     
     return fig, ax
 
 
-def plot_fractional_variance_decomposition(results, t_coord=None):
+def plot_fractional_variance_decomposition(
+    results,
+    t_coord=None,
+    metadata=None,
+    time_label=None,
+    title=None,
+):
+    plot_meta = _resolve_plot_metadata(
+        results,
+        metadata=metadata,
+        time_label=time_label,
+    )
     fig, ax = plt.subplots(figsize=(12, 5))
 
     for col in [
@@ -486,31 +804,62 @@ def plot_fractional_variance_decomposition(results, t_coord=None):
         "fraction_residual_variance",
     ]:
         if col in results:
-            ax.plot(results[col], label=col)
+            if t_coord is None:
+                ax.plot(results[col], label=col)
+            else:
+                ax.plot(t_coord, results[col], label=col)
 
     ax.legend()
-    ax.set_title("Fractional variance decomposition")
+    ax.set_xlabel(plot_meta.time_label)
+    ax.set_ylabel("Fraction of variance")
+    ax.set_title(title or "Fractional variance decomposition")
 
     plt.tight_layout()
     
     return fig, ax
 
 
-def plot_bootstrap_confidence_intervals(results, component="fraction_variance_between_j", t_coord=None):
+def plot_bootstrap_confidence_intervals(
+    results,
+    component="fraction_variance_between_j",
+    t_coord=None,
+    metadata=None,
+    variable_label=None,
+    units=None,
+    time_label=None,
+    title=None,
+):
+    plot_meta = _resolve_plot_metadata(
+        results,
+        metadata=metadata,
+        variable_label=variable_label,
+        units=units,
+        time_label=time_label,
+    )
     fig, ax = plt.subplots(figsize=(12, 5))
 
-    ax.plot(results[component], label=component)
+    if t_coord is None:
+        x_coord = np.arange(len(results[component]))
+    else:
+        x_coord = t_coord
+
+    ax.plot(x_coord, results[component], label=component)
 
     if f"{component}_lower" in results and f"{component}_upper" in results:
         ax.fill_between(
-            np.arange(len(results)),
+            x_coord,
             results[f"{component}_lower"],
             results[f"{component}_upper"],
             alpha=0.3,
         )
 
     ax.legend()
-    ax.set_title(f"Bootstrap confidence intervals: {component}")
+    ax.set_xlabel(plot_meta.time_label)
+    if component.startswith("fraction_") or component.startswith("F_"):
+        ax.set_ylabel("Fraction of variance")
+    else:
+        ax.set_ylabel(_variance_axis_label("Variance", plot_meta))
+    ax.set_title(title or f"Bootstrap confidence intervals: {component}")
 
     plt.tight_layout()
     
@@ -519,9 +868,19 @@ def plot_bootstrap_confidence_intervals(results, component="fraction_variance_be
 def plot_gamma_time_var_bootstrap_median(
     results,
     var_name="gamma_time_var_boot",
+    j_dim="j",
+    t_dim="time",
     cmap="viridis",
     figsize=(12, 5),
-    xtick_step=60):
+    xtick_step=60,
+    metadata=None,
+    variable_label=None,
+    units=None,
+    time_label=None,
+    group_label=None,
+    title=None,
+    colorbar_label=None,
+):
     """
     Plot bootstrap-median temporal variance field.
 
@@ -534,6 +893,9 @@ def plot_gamma_time_var_bootstrap_median(
     var_name : str, default="gamma_time_var_boot"
         Name of bootstrap ensemble variable.
 
+    j_dim, t_dim : str, optional
+        Names of group and temporal dimensions.
+
     cmap : str, default="viridis"
         Matplotlib colormap.
 
@@ -543,6 +905,8 @@ def plot_gamma_time_var_bootstrap_median(
     xtick_step : int, default=60
         Spacing between x-axis ticks.
         For monthly data, 60 corresponds to 5 years.
+    metadata : PlotMetadata or dict, optional
+        Labels and units for plot text.
     """
 
     import matplotlib.pyplot as plt
@@ -555,7 +919,20 @@ def plot_gamma_time_var_bootstrap_median(
     # ------------------------------------------------------
     boot = (
         results[var_name]
-        .transpose("boot", "j", "time")
+        .transpose("boot", j_dim, t_dim)
+    )
+
+    plot_meta = _resolve_plot_metadata(
+        results,
+        metadata=metadata,
+        variable_label=variable_label,
+        units=units,
+        time_label=time_label,
+        group_label=group_label,
+    )
+    variance_label = (
+        colorbar_label
+        or _component_variance_label(r"$\sigma_\gamma^2$", plot_meta)
     )
 
     # ------------------------------------------------------
@@ -593,7 +970,7 @@ def plot_gamma_time_var_bootstrap_median(
         ax=ax,
         cmap=cmap,
         cbar_kwargs={
-            "label": r"$\sigma_\gamma^2$",
+            "label": variance_label,
         },
     )
 
@@ -607,7 +984,7 @@ def plot_gamma_time_var_bootstrap_median(
     )
 
     cbar.set_label(
-        r"$\sigma_\gamma^2$",
+        variance_label,
         fontsize=colorbar_size,
     )
 
@@ -615,17 +992,18 @@ def plot_gamma_time_var_bootstrap_median(
     # Labels/titles
     # ------------------------------------------------------
     ax.set_ylabel(
-        "Group j",
+        plot_meta.group_label,
         fontsize=tick_size,
     )
 
     ax.set_xlabel(
-        "Year",
+        plot_meta.time_label,
         fontsize=tick_size,
     )
 
     ax.set_title(
-        "Time-evolving macro-state temporal variance "
+        title
+        or "Time-evolving macro-state temporal variance "
         "(bootstrap median)",
         fontsize=title_size,
     )
@@ -635,12 +1013,12 @@ def plot_gamma_time_var_bootstrap_median(
     # ------------------------------------------------------
     tick_idx = np.arange(
         0,
-        len(results["time"]),
+        len(results[t_dim]),
         xtick_step,
     )
 
     tick_times = (
-        results["time"]
+        results[t_dim]
         .values[tick_idx]
     )
 
@@ -652,7 +1030,7 @@ def plot_gamma_time_var_bootstrap_median(
     # Labels
     ax.set_xticklabels(
         [
-            f"{t.year:04d}"
+            _format_time_tick(t)
             for t in tick_times
         ],
         rotation=-90,
@@ -670,7 +1048,7 @@ def plot_gamma_time_var_bootstrap_median(
     # ------------------------------------------------------
     # Y-grid at cell edges
     # ------------------------------------------------------
-    j_vals = results["j"].values
+    j_vals = results[j_dim].values
 
     y_edges = np.arange(
         j_vals.min() - 0.5,
@@ -718,9 +1096,17 @@ def plot_gamma_time_var_bootstrap_median(
 def plot_gamma_time_var_bootstrap_envelopes(
     results,
     var_name="gamma_time_var_boot",
+    j_dim="j",
+    t_dim="time",
     cmap_name="tab10",
     figsize=(12, 5),
     year_tick_spacing=5,
+    metadata=None,
+    variable_label=None,
+    units=None,
+    time_label=None,
+    group_label=None,
+    title=None,
 ):
     """
     Plot bootstrap median and percentile envelopes
@@ -735,6 +1121,9 @@ def plot_gamma_time_var_bootstrap_envelopes(
     var_name : str, default="gamma_time_var_boot"
         Name of bootstrap ensemble variable.
 
+    j_dim, t_dim : str, optional
+        Names of group and temporal dimensions.
+
     cmap_name : str, default="tab10"
         Matplotlib colormap name.
 
@@ -743,6 +1132,8 @@ def plot_gamma_time_var_bootstrap_envelopes(
 
     year_tick_spacing : int, default=5
         Spacing between x-axis year ticks.
+    metadata : PlotMetadata or dict, optional
+        Labels and units for plot text.
     """
 
     import matplotlib.pyplot as plt
@@ -759,7 +1150,15 @@ def plot_gamma_time_var_bootstrap_envelopes(
         cmap_name
     )
 
-    time = results["time"].values
+    time = results[t_dim].values
+    plot_meta = _resolve_plot_metadata(
+        results,
+        metadata=metadata,
+        variable_label=variable_label,
+        units=units,
+        time_label=time_label,
+        group_label=group_label,
+    )
 
     # ----------------------------------------------------------
     # Font scaling
@@ -775,9 +1174,9 @@ def plot_gamma_time_var_bootstrap_envelopes(
     # ----------------------------------------------------------
     # Loop over groups
     # ----------------------------------------------------------
-    for j in results["j"].values:
+    for j_index, j in enumerate(results[j_dim].values):
 
-        color = cmap(j)
+        color = cmap(j_index)
 
         # ------------------------------------------------------
         # Bootstrap ensemble
@@ -785,8 +1184,8 @@ def plot_gamma_time_var_bootstrap_envelopes(
         # ------------------------------------------------------
         boot = (
             results[var_name]
-            .sel(j=j)
-            .transpose("boot", "time")
+            .sel({j_dim: j})
+            .transpose("boot", t_dim)
             .values
         )
 
@@ -853,19 +1252,20 @@ def plot_gamma_time_var_bootstrap_envelopes(
             boot_median,
             color=color,
             linewidth=2.5,
-            label=f"j={j}",
+            label=f"{plot_meta.group_label}={j}",
         )
 
     # ----------------------------------------------------------
     # Axis labels and title
     # ----------------------------------------------------------
     ax.set_ylabel(
-        r"$\sigma_\gamma^2$",
+        _component_variance_label(r"$\sigma_\gamma^2$", plot_meta),
         fontsize=tick_size,
     )
 
     ax.set_title(
-        "Macro-state temporal variance "
+        title
+        or "Macro-state temporal variance "
         "with bootstrap median and "
         "50%, 90% percentile envelopes",
         fontsize=title_size,
@@ -874,45 +1274,48 @@ def plot_gamma_time_var_bootstrap_envelopes(
     # ----------------------------------------------------------
     # X-axis ticks
     # ----------------------------------------------------------
-    years = np.array(
-        [t.year for t in time]
-    )
+    years = np.array([_year_from_time(t) for t in time])
 
-    tick_years = np.arange(
-        (years.min() // year_tick_spacing)
-        * year_tick_spacing,
-        (
-            (years.max() // year_tick_spacing)
-            + 1
-        )
-        * year_tick_spacing,
-        year_tick_spacing,
-    )
+    if all(year is not None for year in years):
+        years = years.astype(int)
 
-    # ----------------------------------------------------------
-    # Representative positions
-    # ----------------------------------------------------------
-    tick_positions = [
-        time[
-            np.argmin(
-                np.abs(years - y)
+        tick_years = np.arange(
+            (years.min() // year_tick_spacing)
+            * year_tick_spacing,
+            (
+                (years.max() // year_tick_spacing)
+                + 1
             )
-        ]
-        for y in tick_years
-    ]
+            * year_tick_spacing,
+            year_tick_spacing,
+        )
 
-    ax.set_xticks(
-        tick_positions
-    )
-
-    ax.set_xticklabels(
-        [
-            f"{y:04d}"
+        # ----------------------------------------------------------
+        # Representative positions
+        # ----------------------------------------------------------
+        tick_positions = [
+            time[
+                np.argmin(
+                    np.abs(years - y)
+                )
+            ]
             for y in tick_years
-        ],
-        rotation=-90,
-        ha="center",
-    )
+        ]
+
+        ax.set_xticks(
+            tick_positions
+        )
+
+        ax.set_xticklabels(
+            [
+                f"{y:04d}"
+                for y in tick_years
+            ],
+            rotation=-90,
+            ha="center",
+        )
+
+    ax.set_xlabel(plot_meta.time_label)
 
     # ----------------------------------------------------------
     # Tick formatting
@@ -948,10 +1351,17 @@ def plot_gamma_to_epsilon_snr_bootstrap_subset(
     gamma_boot_var="gamma_time_var_boot",
     epsilon_var="epsilon_time_var",
     epsilon_boot_var="epsilon_time_var_boot",
+    j_dim="j",
+    k_dim="k",
+    t_dim="time",
     cmap_name="tab10",
     figsize=(12, 5),
     xtick_step=60,
     save_path=None,
+    metadata=None,
+    time_label=None,
+    group_label=None,
+    title=None,
 ):
     """
     Plot macro-state signal-to-noise ratio:
@@ -986,6 +1396,9 @@ def plot_gamma_to_epsilon_snr_bootstrap_subset(
     epsilon_boot_var : str
         Bootstrap epsilon variance variable.
 
+    j_dim, k_dim, t_dim : str, optional
+        Names of group, member, and temporal dimensions.
+
     cmap_name : str, default="tab10"
         Matplotlib colormap.
 
@@ -999,6 +1412,8 @@ def plot_gamma_to_epsilon_snr_bootstrap_subset(
     save_path : str or None, default=None
         Optional output file path.
         If provided, the figure is saved.
+    metadata : PlotMetadata or dict, optional
+        Labels for plot text.
     """
 
     import matplotlib.pyplot as plt
@@ -1009,7 +1424,14 @@ def plot_gamma_to_epsilon_snr_bootstrap_subset(
     # ----------------------------------------------------------
     if j_subset is None:
 
-        j_subset = results["j"].values
+        j_subset = results[j_dim].values
+
+    plot_meta = _resolve_plot_metadata(
+        results,
+        metadata=metadata,
+        time_label=time_label,
+        group_label=group_label,
+    )
 
     # ----------------------------------------------------------
     # Font scaling
@@ -1033,7 +1455,7 @@ def plot_gamma_to_epsilon_snr_bootstrap_subset(
         cmap_name
     )
 
-    time = results["time"].values
+    time = results[t_dim].values
 
     # ----------------------------------------------------------
     # Ensemble-mean epsilon bootstrap distribution
@@ -1043,8 +1465,8 @@ def plot_gamma_to_epsilon_snr_bootstrap_subset(
     # ----------------------------------------------------------
     epsilon_boot = (
         results[epsilon_boot_var]
-        .mean(dim=("j", "k"))
-        .transpose("boot", "time")
+        .mean(dim=(j_dim, k_dim))
+        .transpose("boot", t_dim)
     )
 
     # ----------------------------------------------------------
@@ -1052,22 +1474,22 @@ def plot_gamma_to_epsilon_snr_bootstrap_subset(
     # ----------------------------------------------------------
     epsilon_central = (
         results[epsilon_var]
-        .mean(dim=("j", "k"))
+        .mean(dim=(j_dim, k_dim))
     )
 
     # ----------------------------------------------------------
     # Loop over selected groups
     # ----------------------------------------------------------
-    for j in j_subset:
+    for j_index, j in enumerate(j_subset):
 
-        color = cmap(j)
+        color = cmap(j_index)
 
         # ------------------------------------------------------
         # Central gamma estimate
         # ------------------------------------------------------
         gamma_central = (
             results[gamma_var]
-            .sel(j=j)
+            .sel({j_dim: j})
         )
 
         # ------------------------------------------------------
@@ -1086,8 +1508,8 @@ def plot_gamma_to_epsilon_snr_bootstrap_subset(
         # ------------------------------------------------------
         gamma_boot = (
             results[gamma_boot_var]
-            .sel(j=j)
-            .transpose("boot", "time")
+            .sel({j_dim: j})
+            .transpose("boot", t_dim)
         )
 
         # ------------------------------------------------------
@@ -1156,7 +1578,7 @@ def plot_gamma_to_epsilon_snr_bootstrap_subset(
             p50.values,
             color=color,
             linewidth=2.5,
-            label=f"j={j}",
+            label=f"{plot_meta.group_label}={j}",
         )
 
     # ----------------------------------------------------------
@@ -1178,12 +1600,13 @@ def plot_gamma_to_epsilon_snr_bootstrap_subset(
     )
 
     ax.set_xlabel(
-        "Year",
+        plot_meta.time_label,
         fontsize=tick_size,
     )
 
     ax.set_title(
-        r"Macro-state signal-to-noise ratio "
+        title
+        or r"Macro-state signal-to-noise ratio "
         r"($\sigma_\gamma^2 / \sigma_\epsilon^2$)"
         "\n"
         r"(bootstrap median with 50% and 90% percentile envelopes)",
@@ -1207,7 +1630,7 @@ def plot_gamma_to_epsilon_snr_bootstrap_subset(
 
     ax.set_xticklabels(
         [
-            f"{t.year:04d}"
+            _format_time_tick(t)
             for t in tick_times
         ],
         rotation=-90,
@@ -1277,9 +1700,16 @@ def plot_gamma_to_epsilon_snr_bootstrap(
     gamma_boot_var="gamma_time_var_boot",
     epsilon_var="epsilon_time_var",
     epsilon_boot_var="epsilon_time_var_boot",
+    j_dim="j",
+    k_dim="k",
+    t_dim="time",
     cmap_name="tab10",
     figsize=(12, 5),
     xtick_step=60,
+    metadata=None,
+    time_label=None,
+    group_label=None,
+    title=None,
 ):
     """
     Plot macro-state signal-to-noise ratio:
@@ -1306,6 +1736,9 @@ def plot_gamma_to_epsilon_snr_bootstrap(
     epsilon_boot_var : str
         Bootstrap epsilon variance variable.
 
+    j_dim, k_dim, t_dim : str, optional
+        Names of group, member, and temporal dimensions.
+
     cmap_name : str, default="tab10"
         Matplotlib colormap.
 
@@ -1315,6 +1748,8 @@ def plot_gamma_to_epsilon_snr_bootstrap(
     xtick_step : int, default=60
         Tick spacing in samples.
         For monthly data, 60 = 5 years.
+    metadata : PlotMetadata or dict, optional
+        Labels for plot text.
     """
 
     import matplotlib.pyplot as plt
@@ -1342,7 +1777,13 @@ def plot_gamma_to_epsilon_snr_bootstrap(
         cmap_name
     )
 
-    time = results["time"].values
+    time = results[t_dim].values
+    plot_meta = _resolve_plot_metadata(
+        results,
+        metadata=metadata,
+        time_label=time_label,
+        group_label=group_label,
+    )
 
     # ----------------------------------------------------------
     # Ensemble-mean epsilon bootstrap distribution
@@ -1352,8 +1793,8 @@ def plot_gamma_to_epsilon_snr_bootstrap(
     # ----------------------------------------------------------
     epsilon_boot = (
         results[epsilon_boot_var]
-        .mean(dim=("j", "k"))
-        .transpose("boot", "time")
+        .mean(dim=(j_dim, k_dim))
+        .transpose("boot", t_dim)
     )
 
     # ----------------------------------------------------------
@@ -1361,22 +1802,22 @@ def plot_gamma_to_epsilon_snr_bootstrap(
     # ----------------------------------------------------------
     epsilon_central = (
         results[epsilon_var]
-        .mean(dim=("j", "k"))
+        .mean(dim=(j_dim, k_dim))
     )
 
     # ----------------------------------------------------------
     # Loop over groups
     # ----------------------------------------------------------
-    for j in results["j"].values:
+    for j_index, j in enumerate(results[j_dim].values):
 
-        color = cmap(j)
+        color = cmap(j_index)
 
         # ------------------------------------------------------
         # Central gamma estimate
         # ------------------------------------------------------
         gamma_central = (
             results[gamma_var]
-            .sel(j=j)
+            .sel({j_dim: j})
         )
 
         # ------------------------------------------------------
@@ -1395,8 +1836,8 @@ def plot_gamma_to_epsilon_snr_bootstrap(
         # ------------------------------------------------------
         gamma_boot = (
             results[gamma_boot_var]
-            .sel(j=j)
-            .transpose("boot", "time")
+            .sel({j_dim: j})
+            .transpose("boot", t_dim)
         )
 
         # ------------------------------------------------------
@@ -1465,7 +1906,7 @@ def plot_gamma_to_epsilon_snr_bootstrap(
             p50.values,
             color=color,
             linewidth=2.5,
-            label=f"j={j}",
+            label=f"{plot_meta.group_label}={j}",
         )
 
     # ----------------------------------------------------------
@@ -1487,12 +1928,13 @@ def plot_gamma_to_epsilon_snr_bootstrap(
     )
 
     ax.set_xlabel(
-        "Year",
+        plot_meta.time_label,
         fontsize=tick_size,
     )
 
     ax.set_title(
-        r"Macro-state signal-to-noise ratio "
+        title
+        or r"Macro-state signal-to-noise ratio "
         r"($\sigma_\gamma^2 / \sigma_\epsilon^2$)"
         "\n"
         r"(bootstrap median with 50% and 90% percentile envelopes)",
@@ -1516,7 +1958,7 @@ def plot_gamma_to_epsilon_snr_bootstrap(
 
     ax.set_xticklabels(
         [
-            f"{t.year:04d}"
+            _format_time_tick(t)
             for t in tick_times
         ],
         rotation=-90,
@@ -1570,7 +2012,30 @@ def plot_gamma_to_epsilon_snr_bootstrap(
     return fig, ax
 
 
-def plot_member_spaghetti(g, j_dim="j", k_dim="k", t_dim="t", alpha=0.4, title="Ensemble member spaghetti plot"):
+def plot_member_spaghetti(
+    g,
+    j_dim="j",
+    k_dim="k",
+    t_dim="t",
+    alpha=0.4,
+    title="Ensemble member spaghetti plot",
+    metadata=None,
+    variable_label=None,
+    units=None,
+    time_label=None,
+):
+
+    plot_meta = _resolve_plot_metadata(
+        g,
+        metadata=metadata,
+        variable_label=variable_label,
+        units=units,
+        time_label=time_label,
+    )
+    value_label = _label_with_units(
+        plot_meta.variable_label,
+        plot_meta.units,
+    )
 
     fig, ax = plt.subplots(figsize=(12, 5))
 
@@ -1606,17 +2071,40 @@ def plot_member_spaghetti(g, j_dim="j", k_dim="k", t_dim="t", alpha=0.4, title="
 
     ax.legend()
     ax.set_title(title)
+    ax.set_xlabel(plot_meta.time_label)
+    ax.set_ylabel(value_label)
 
     plt.tight_layout()
 
     return fig, ax
 
 
-def plot_example_window_decomposition(g_window, j_dim="j", k_dim="k", t_dim="t"):
+def plot_example_window_decomposition(
+    g_window,
+    j_dim="j",
+    k_dim="k",
+    t_dim="t",
+    metadata=None,
+    variable_label=None,
+    units=None,
+    group_label=None,
+    member_label=None,
+    title=None,
+):
+    plot_meta = _resolve_plot_metadata(
+        g_window,
+        metadata=metadata,
+        variable_label=variable_label,
+        units=units,
+        group_label=group_label,
+        member_label=member_label,
+    )
     fig, ax = plt.subplots(figsize=(12, 5))
 
     g_window.mean(dim=t_dim).plot(ax=ax)
-    ax.set_title("Example window mean structure")
+    ax.set_title(title or "Example window mean structure")
+    ax.set_xlabel(plot_meta.member_label)
+    ax.set_ylabel(plot_meta.group_label)
 
     plt.tight_layout()
     

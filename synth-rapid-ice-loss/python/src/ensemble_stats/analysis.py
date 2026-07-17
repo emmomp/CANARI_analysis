@@ -16,6 +16,38 @@ from sklearn.feature_selection import mutual_info_regression
 from statsmodels.tsa.stattools import acf
 from statsmodels.tsa.seasonal import STL
 
+
+def _source_metadata_attrs(g):
+    """Collect source-variable metadata for downstream plots."""
+    attrs = getattr(g, "attrs", {}) or {}
+
+    source_attrs = {}
+
+    if getattr(g, "name", None) is not None:
+        source_attrs["source_variable"] = g.name
+
+    source_long_name = (
+        attrs.get("long_name")
+        or attrs.get("standard_name")
+        or getattr(g, "name", None)
+    )
+
+    if source_long_name is not None:
+        source_attrs["source_long_name"] = source_long_name
+
+    if attrs.get("units") is not None:
+        source_attrs["source_units"] = attrs["units"]
+
+    return source_attrs
+
+
+def _squared_units(units):
+    if units is None:
+        return None
+
+    return f"({units})^2"
+
+
 def validate_input_dims(g, j_dim="j", k_dim="k", t_dim="t"):
     """
     Validate that an input array contains required dimensions.
@@ -95,6 +127,24 @@ def compute_STL_decomposition(
         },
         coords={t_dim: g_jk_mean[t_dim]},
     )
+
+    source_attrs = _source_metadata_attrs(g)
+    ds_stl.attrs.update(source_attrs)
+    ds_stl.attrs["t_dim"] = t_dim
+
+    for var_name, component in {
+        "STL_trend": "STL trend",
+        "STL_seasonal": "STL seasonal component",
+        "STL_resid": "STL residual",
+    }.items():
+
+        if "source_long_name" in source_attrs:
+            ds_stl[var_name].attrs["long_name"] = (
+                f"{component} of {source_attrs['source_long_name']}"
+            )
+
+        if "source_units" in source_attrs:
+            ds_stl[var_name].attrs["units"] = source_attrs["source_units"]
 
     return ds_stl
     
@@ -1264,6 +1314,8 @@ def sliding_window_MBB_ensemble_analysis(
 
     window_coord = np.arange(window_length)
 
+    source_attrs = _source_metadata_attrs(g)
+
     # ----------------------------------------------------------
     # Explicit dimension map
     # ----------------------------------------------------------
@@ -1395,11 +1447,38 @@ def sliding_window_MBB_ensemble_analysis(
         # ------------------------------------------------------
         # Create DataArray
         # ------------------------------------------------------
-        data_vars[key] = xr.DataArray(
+        data_array = xr.DataArray(
             arr,
             dims=dims,
             coords=coords,
         )
+
+        if "source_units" in source_attrs:
+
+            if (
+                base_key.endswith("_time_var")
+                or base_key == "total_time_var"
+            ):
+
+                data_array.attrs["units"] = _squared_units(
+                    source_attrs["source_units"]
+                )
+
+            elif base_key.startswith("F_"):
+
+                data_array.attrs["units"] = "1"
+
+            else:
+
+                data_array.attrs["units"] = source_attrs["source_units"]
+
+        if "source_long_name" in source_attrs:
+
+            data_array.attrs["source_long_name"] = (
+                source_attrs["source_long_name"]
+            )
+
+        data_vars[key] = data_array
 
     # ----------------------------------------------------------
     # Construct dataset
@@ -1409,6 +1488,14 @@ def sliding_window_MBB_ensemble_analysis(
     # ----------------------------------------------------------
     # Metadata
     # ----------------------------------------------------------
+    ds.attrs.update(source_attrs)
+
+    ds.attrs["j_dim"] = j_dim
+
+    ds.attrs["k_dim"] = k_dim
+
+    ds.attrs["t_dim"] = t_dim
+
     ds.attrs["window_length"] = int(window_length)
 
     ds.attrs["block_length"] = (

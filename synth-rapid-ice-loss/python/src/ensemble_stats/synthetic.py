@@ -25,7 +25,13 @@ def generate_synthetic_nested_ensemble(
     R_jkt_scale = 1.0,
     residual_scale=0.000,
     start_date="1950-01-21",
-    seed=123):
+    seed=123,
+    j_dim="j",
+    k_dim="k",
+    t_dim="t",
+    variable_name="synthetic_field",
+    variable_label="Synthetic field",
+    units=None):
 
     """
         SYNTHETIC HIERARCHICAL ENSEMBLE GENERATOR
@@ -134,6 +140,19 @@ def generate_synthetic_nested_ensemble(
     
     seed
         Random seed for reproducible ensemble generation.
+
+    j_dim, k_dim, t_dim
+        Dimension names used in the returned DataArray.
+
+    variable_name
+        Name of the returned DataArray.
+
+    variable_label
+        Human-readable label stored as the ``long_name`` attribute.
+
+    units
+        Physical units stored as the ``units`` attribute. Use None for
+        dimensionless synthetic output.
     
     
     
@@ -339,14 +358,22 @@ def generate_synthetic_nested_ensemble(
         + noise
     )
 
+    attrs = {
+        "long_name": variable_label,
+    }
+
+    if units is not None:
+
+        attrs["units"] = units
+
     return xr.DataArray(
         data,
-        dims=["j", "k", "t"],
+        dims=[j_dim, k_dim, t_dim],
         coords={
-            "j": np.arange(nj),
-            "k": np.arange(nk),
-            "t": time,
+            j_dim: np.arange(nj),
+            k_dim: np.arange(nk),
+            t_dim: time,
         },
-        name="synthetic_field",
+        name=variable_name,
+        attrs=attrs,
     )
-

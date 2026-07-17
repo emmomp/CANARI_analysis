@@ -33,6 +33,7 @@ from .analysis import (
 )
 
 from .plotting import (
+    PlotMetadata,
     plot_STL_decomposition,
     plot_groups_members,
     plot_preprocessing_components,
@@ -74,6 +75,7 @@ __all__ = [
     "compute_preprocessing_variance_statistics",
 
     # plotting
+    "PlotMetadata",
     "plot_STL_decomposition",
     "plot_groups_members",
     "plot_preprocessing_components",
