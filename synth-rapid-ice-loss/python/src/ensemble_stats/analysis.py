@@ -83,6 +83,7 @@ def compute_STL_decomposition(
     t_dim="time",
     period=12,
     robust=False
+    trend=None,
 ):
     """
     Compute STL decomposition of the grand ensemble-mean timeseries.
@@ -116,6 +117,7 @@ def compute_STL_decomposition(
         g_jk_mean.values,
         period=period,
         robust=robust,
+        trend=trend
     ).fit()
 
     # Convert STL output back to xarray Dataset
