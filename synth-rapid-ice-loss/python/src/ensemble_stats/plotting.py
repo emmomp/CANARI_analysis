@@ -1482,7 +1482,7 @@ def plot_gamma_to_epsilon_snr_bootstrap_subset(
     # ----------------------------------------------------------
     for j_index, j in enumerate(j_subset):
 
-        color = cmap(j_index)
+        color = cmap(j)
 
         # ------------------------------------------------------
         # Central gamma estimate
