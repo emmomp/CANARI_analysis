@@ -82,7 +82,7 @@ def compute_STL_decomposition(
     k_dim="k",
     t_dim="time",
     period=12,
-    robust=False
+    robust=False,
     trend=None,
 ):
     """
