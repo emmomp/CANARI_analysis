@@ -218,6 +218,7 @@ def test_temporal_variance_components_bootstrap_plot_grand_and_group():
         results,
         metadata=metadata,
         xtick_step=2,
+        ylim=(-0.02, 0.40),
         show=False,
     )
 
@@ -262,6 +263,7 @@ def test_temporal_variance_components_bootstrap_plot_grand_and_group():
             r"macro-state variance (selected macro)"
         ) in labels
         assert "macro-state selected macro" in ax.get_title()
+        assert not np.allclose(ax.get_ylim(), (-0.02, 0.40))
     finally:
         plt.close(fig)
 

@@ -1671,7 +1671,7 @@ def plot_temporal_variance_components_bootstrap(
     boot_dim="boot",
     figsize=(12, 6),
     xtick_step=60,
-    ylim=(-0.02, 0.40),
+    ylim=None,
     save_path=None,
     metadata=None,
     variable_label=None,
@@ -1715,7 +1715,7 @@ def plot_temporal_variance_components_bootstrap(
     xtick_step : int or None, default=60
         Tick spacing in samples. For monthly data, 60 = 5 years.
 
-    ylim : tuple or None, default=(-0.02, 0.40)
+    ylim : tuple or None, default=None
         Y-axis limits. Use None to leave limits autoscaled.
 
     save_path : str or None, default=None
