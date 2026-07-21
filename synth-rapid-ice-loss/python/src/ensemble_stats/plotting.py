@@ -117,6 +117,15 @@ def _variance_axis_label(label, metadata):
     return _label_with_units(label, _squared_units(metadata.units))
 
 
+def _temporal_variance_axis_label(metadata):
+    if metadata.units:
+        return (
+            f"Temporal variance of {metadata.variable_label} "
+            f"({metadata.units})$^2$"
+        )
+    return f"Temporal variance of {metadata.variable_label}"
+
+
 def _component_variance_label(symbol, metadata):
     units = _squared_units(metadata.units)
     if units:
@@ -1617,6 +1626,498 @@ def plot_fraction_predictable_variance_bootstrap(
     ax.legend(
         ncol=2,
         fontsize=legend_size,
+    )
+
+    # ----------------------------------------------------------
+    # Tight axis/layout
+    # ----------------------------------------------------------
+    ax.axis("tight")
+
+    if ylim is not None:
+
+        ax.set_ylim(*ylim)
+
+    plt.tight_layout()
+
+    # ----------------------------------------------------------
+    # Optional save
+    # ----------------------------------------------------------
+    if save_path is not None:
+
+        fig.savefig(
+            save_path,
+            dpi=300,
+            bbox_inches="tight",
+        )
+
+    if show:
+
+        plt.show()
+
+    return fig, ax
+
+
+def plot_temporal_variance_components_bootstrap(
+    results,
+    j_sel=None,
+    macro_label=None,
+    alpha_boot_var="alpha_time_var_boot",
+    gamma_boot_var="gamma_time_var_boot",
+    epsilon_boot_var="epsilon_time_var_boot",
+    total_boot_var="total_time_var_boot",
+    j_dim="j",
+    k_dim="k",
+    t_dim="time",
+    boot_dim="boot",
+    figsize=(12, 6),
+    xtick_step=60,
+    ylim=(-0.02, 0.40),
+    save_path=None,
+    metadata=None,
+    variable_label=None,
+    units=None,
+    time_label=None,
+    group_label=None,
+    title=None,
+    legend_loc=None,
+    show=True,
+):
+    """
+    Plot bootstrap temporal variance decomposition components.
+
+    With ``j_sel=None``, this plots the grand-ensemble mean components.
+    With ``j_sel`` set, it plots the selected macro-state components,
+    the selected macro-state total, and the overall total variance.
+
+    Parameters
+    ----------
+    results : xarray.Dataset
+        Output dataset from sliding_window_MBB_ensemble_analysis()
+        containing stored bootstrap samples.
+
+    j_sel : scalar or None, default=None
+        Optional selected macro-state coordinate. If None, plot the
+        grand-ensemble mean of the variance components.
+
+    macro_label : str or None, default=None
+        Optional display label for the selected macro-state. If omitted,
+        the label is derived from ``group_label`` and ``j_sel``.
+
+    alpha_boot_var, gamma_boot_var, epsilon_boot_var, total_boot_var : str
+        Names of bootstrap variance variables in ``results``.
+
+    j_dim, k_dim, t_dim, boot_dim : str, optional
+        Names of group, member, temporal, and bootstrap dimensions.
+
+    figsize : tuple, default=(12, 6)
+        Figure size.
+
+    xtick_step : int or None, default=60
+        Tick spacing in samples. For monthly data, 60 = 5 years.
+
+    ylim : tuple or None, default=(-0.02, 0.40)
+        Y-axis limits. Use None to leave limits autoscaled.
+
+    save_path : str or None, default=None
+        Optional output file path. If provided, the figure is saved.
+
+    metadata : PlotMetadata or dict, optional
+        Labels for plot text.
+
+    show : bool, default=True
+        Whether to call matplotlib.pyplot.show().
+    """
+
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    plot_meta = _resolve_plot_metadata(
+        results,
+        metadata=metadata,
+        variable_label=variable_label,
+        units=units,
+        time_label=time_label,
+        group_label=group_label,
+    )
+
+    # ----------------------------------------------------------
+    # Font scaling
+    # ----------------------------------------------------------
+    base_tick_size = 10
+    base_legend_size = 9
+    base_title_size = 12
+
+    tick_size = base_tick_size * 1.5
+    legend_size = base_legend_size * 1.2
+    title_size = base_title_size * 1.2
+
+    # ----------------------------------------------------------
+    # Time coordinate and bootstrap distributions
+    # ----------------------------------------------------------
+    time = results[t_dim].values
+
+    alpha_boot = (
+        results[alpha_boot_var]
+        .transpose(boot_dim, t_dim)
+    )
+
+    total_boot = (
+        results[total_boot_var]
+        .mean(dim=(j_dim, k_dim))
+        .transpose(boot_dim, t_dim)
+    )
+
+    if j_sel is None:
+
+        gamma_boot = (
+            results[gamma_boot_var]
+            .mean(dim=j_dim)
+            .transpose(boot_dim, t_dim)
+        )
+
+        epsilon_boot = (
+            results[epsilon_boot_var]
+            .mean(dim=(j_dim, k_dim))
+            .transpose(boot_dim, t_dim)
+        )
+
+        components = [
+            {
+                "boot": alpha_boot,
+                "label": (
+                    r"$\sigma_\alpha^2$ : "
+                    "grand-ensemble signal"
+                ),
+                "line_color": None,
+                "fill_color": None,
+                "linewidth": 3,
+                "outer_alpha": 0.15,
+                "inner_alpha": 0.35,
+            },
+            {
+                "boot": gamma_boot,
+                "label": (
+                    r"$\sigma_\gamma^2$ : "
+                    "macro-state variance"
+                ),
+                "line_color": None,
+                "fill_color": None,
+                "linewidth": 2.5,
+                "outer_alpha": 0.15,
+                "inner_alpha": 0.35,
+            },
+            {
+                "boot": epsilon_boot,
+                "label": (
+                    r"$\sigma_\epsilon^2$ : "
+                    "internal variability"
+                ),
+                "line_color": None,
+                "fill_color": None,
+                "linewidth": 2.5,
+                "outer_alpha": 0.15,
+                "inner_alpha": 0.35,
+            },
+            {
+                "boot": total_boot,
+                "label": (
+                    r"$\sigma_{\mathrm{macro-total}}^2$ : "
+                    "total variance"
+                ),
+                "line_color": "black",
+                "fill_color": "grey",
+                "linewidth": 2.5,
+                "outer_alpha": 0.12,
+                "inner_alpha": 0.25,
+            },
+        ]
+
+        default_title = (
+            "Grand ensemble-mean of ANOVA decomposition of "
+            f"monthly-mean {plot_meta.variable_label} temporal variance"
+            "\n"
+            "(bootstrap median with 50% and 90% percentile envelopes)"
+        )
+
+    else:
+
+        if macro_label is None:
+
+            if plot_meta.group_label == "j":
+
+                macro_display_label = f"$j={j_sel}$"
+
+            else:
+
+                macro_display_label = (
+                    f"{plot_meta.group_label}={j_sel}"
+                )
+
+        else:
+
+            macro_display_label = str(macro_label)
+
+        gamma_boot = (
+            results[gamma_boot_var]
+            .sel({j_dim: j_sel})
+            .transpose(boot_dim, t_dim)
+        )
+
+        epsilon_boot = (
+            results[epsilon_boot_var]
+            .sel({j_dim: j_sel})
+            .mean(dim=k_dim)
+            .transpose(boot_dim, t_dim)
+        )
+
+        total_group_boot = (
+            results[total_boot_var]
+            .sel({j_dim: j_sel})
+            .mean(dim=k_dim)
+            .transpose(boot_dim, t_dim)
+        )
+
+        components = [
+            {
+                "boot": alpha_boot,
+                "label": (
+                    r"$\sigma_\alpha^2$ : "
+                    "grand-ensemble signal"
+                ),
+                "line_color": None,
+                "fill_color": None,
+                "linewidth": 3,
+                "outer_alpha": 0.15,
+                "inner_alpha": 0.35,
+            },
+            {
+                "boot": gamma_boot,
+                "label": (
+                    r"$\sigma_\gamma^2$ : "
+                    f"macro-state variance ({macro_display_label})"
+                ),
+                "line_color": None,
+                "fill_color": None,
+                "linewidth": 2.5,
+                "outer_alpha": 0.15,
+                "inner_alpha": 0.35,
+            },
+            {
+                "boot": epsilon_boot,
+                "label": (
+                    r"$\sigma_\epsilon^2$ : "
+                    f"internal variability ({macro_display_label})"
+                ),
+                "line_color": None,
+                "fill_color": None,
+                "linewidth": 2.5,
+                "outer_alpha": 0.15,
+                "inner_alpha": 0.35,
+            },
+            {
+                "boot": total_group_boot,
+                "label": (
+                    r"$\sigma_{\mathrm{macro-total}}^2$ : "
+                    "total variance of macro "
+                    f"({macro_display_label})"
+                ),
+                "line_color": "magenta",
+                "fill_color": "pink",
+                "linewidth": 2.5,
+                "outer_alpha": 0.12,
+                "inner_alpha": 0.25,
+            },
+            {
+                "boot": total_boot,
+                "label": (
+                    r"$\sigma_{\mathrm{total}}^2$ : "
+                    "total variance"
+                ),
+                "line_color": "black",
+                "fill_color": "grey",
+                "linewidth": 2.5,
+                "outer_alpha": 0.12,
+                "inner_alpha": 0.25,
+            },
+        ]
+
+        default_title = (
+            "ANOVA temporal variance decomposition for "
+            f"macro-state {macro_display_label}"
+            "\n"
+            "(bootstrap median with 50% and 90% percentile envelopes)"
+        )
+
+    # ----------------------------------------------------------
+    # Figure
+    # ----------------------------------------------------------
+    fig, ax = plt.subplots(
+        figsize=figsize
+    )
+
+    default_colors = (
+        plt.rcParams["axes.prop_cycle"]
+        .by_key()
+        .get("color", [None])
+    )
+
+    # ----------------------------------------------------------
+    # Plot bootstrap percentile envelopes and medians
+    # ----------------------------------------------------------
+    for component_index, component in enumerate(components):
+
+        boot_values = component["boot"]
+        fill_color = component["fill_color"]
+        line_color = component["line_color"]
+
+        if fill_color is None:
+
+            fill_color = default_colors[
+                component_index % len(default_colors)
+            ]
+
+        if line_color is None:
+
+            line_color = fill_color
+
+        p05 = boot_values.quantile(
+            0.05,
+            dim=boot_dim,
+        )
+
+        p25 = boot_values.quantile(
+            0.25,
+            dim=boot_dim,
+        )
+
+        p50 = boot_values.quantile(
+            0.50,
+            dim=boot_dim,
+        )
+
+        p75 = boot_values.quantile(
+            0.75,
+            dim=boot_dim,
+        )
+
+        p95 = boot_values.quantile(
+            0.95,
+            dim=boot_dim,
+        )
+
+        ax.fill_between(
+            time,
+            p05.values,
+            p95.values,
+            color=fill_color,
+            alpha=component["outer_alpha"],
+        )
+
+        ax.fill_between(
+            time,
+            p25.values,
+            p75.values,
+            color=fill_color,
+            alpha=component["inner_alpha"],
+        )
+
+        ax.plot(
+            time,
+            p50.values,
+            color=line_color,
+            linewidth=component["linewidth"],
+            label=component["label"],
+        )
+
+    # ----------------------------------------------------------
+    # Labels/titles
+    # ----------------------------------------------------------
+    ax.set_ylabel(
+        _temporal_variance_axis_label(plot_meta),
+        fontsize=tick_size,
+    )
+
+    ax.set_xlabel(
+        plot_meta.time_label,
+        fontsize=tick_size,
+    )
+
+    ax.set_title(
+        title or default_title,
+        fontsize=title_size,
+    )
+
+    # ----------------------------------------------------------
+    # Tick spacing
+    # ----------------------------------------------------------
+    if xtick_step is not None:
+
+        tick_idx = np.arange(
+            0,
+            len(time),
+            xtick_step,
+        )
+
+        tick_times = time[tick_idx]
+
+        ax.set_xticks(
+            tick_times
+        )
+
+        ax.set_xticklabels(
+            [
+                _format_time_tick(t)
+                for t in tick_times
+            ],
+            rotation=-90,
+            ha="center",
+        )
+
+    # ----------------------------------------------------------
+    # Tick formatting
+    # ----------------------------------------------------------
+    ax.tick_params(
+        axis="both",
+        labelsize=tick_size,
+    )
+
+    # ----------------------------------------------------------
+    # Grid
+    # ----------------------------------------------------------
+    ax.grid(
+        which="major",
+        axis="x",
+        color="lightgray",
+        linewidth=1.0,
+        alpha=0.5,
+    )
+
+    ax.grid(
+        which="major",
+        axis="y",
+        color="lightgray",
+        linewidth=1.0,
+        alpha=0.5,
+    )
+
+    # ----------------------------------------------------------
+    # Legend
+    # ----------------------------------------------------------
+    legend_kwargs = {
+        "ncol": 1,
+        "fontsize": legend_size,
+    }
+
+    if legend_loc is not None:
+
+        legend_kwargs["loc"] = legend_loc
+
+    elif j_sel is not None:
+
+        legend_kwargs["loc"] = "upper left"
+
+    ax.legend(
+        **legend_kwargs
     )
 
     # ----------------------------------------------------------
