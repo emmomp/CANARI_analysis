@@ -75,3 +75,65 @@ def test_stl_plot_metadata_and_residual_overlay_offset():
         assert horizontal_lines_at_offset
     finally:
         plt.close(fig)
+
+
+def test_fraction_predictable_variance_bootstrap_plot():
+    time = np.array([2000, 2001, 2002, 2003])
+    boot = np.arange(3)
+    j = np.array([0, 1])
+    k = np.array([0, 1])
+
+    values = np.empty((len(time), len(boot), len(j), len(k)))
+    for t_idx, _ in enumerate(time):
+        for b_idx, _ in enumerate(boot):
+            for j_idx, _ in enumerate(j):
+                values[t_idx, b_idx, j_idx, :] = (
+                    0.1
+                    + 0.1 * j_idx
+                    + 0.01 * t_idx
+                    + 0.02 * b_idx
+                )
+
+    results = xr.Dataset(
+        {
+            "F_pred_boot": (
+                ("time", "boot", "j", "k"),
+                values,
+            ),
+        },
+        coords={
+            "time": time,
+            "boot": boot,
+            "j": j,
+            "k": k,
+        },
+    )
+
+    metadata = plotting.PlotMetadata(
+        time_label="Year",
+        group_label="j",
+    )
+
+    fig, ax = plotting.plot_fraction_predictable_variance_bootstrap(
+        results,
+        metadata=metadata,
+        xtick_step=2,
+        show=False,
+    )
+
+    try:
+        assert ax.get_xlabel() == "Year"
+        assert ax.get_ylabel() == "Fraction of predictable variance"
+        assert ax.get_ylim() == (0.0, 1.0)
+
+        _, labels = ax.get_legend_handles_labels()
+        assert labels == ["j=0", "j=1"]
+
+        assert len(ax.lines) == 2
+        assert len(ax.collections) == 4
+        assert [tick.get_text() for tick in ax.get_xticklabels()] == [
+            "2000",
+            "2002",
+        ]
+    finally:
+        plt.close(fig)

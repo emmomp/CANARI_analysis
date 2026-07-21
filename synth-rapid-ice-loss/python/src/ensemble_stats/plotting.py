@@ -1344,6 +1344,310 @@ def plot_gamma_time_var_bootstrap_envelopes(
 
     return fig, ax
 
+
+def plot_fraction_predictable_variance_bootstrap(
+    results,
+    f_pred_boot_var="F_pred_boot",
+    j_dim="j",
+    k_dim="k",
+    t_dim="time",
+    boot_dim="boot",
+    j_subset=None,
+    cmap_name="tab10",
+    figsize=(12, 6),
+    xtick_step=60,
+    ylim=(0, 1),
+    save_path=None,
+    metadata=None,
+    time_label=None,
+    group_label=None,
+    title=None,
+    show=True,
+):
+    """
+    Plot macro-state fraction of predictable variance.
+
+    Shows bootstrap medians with 50% and 90% percentile envelopes for
+    each macro group after averaging over member dimension.
+
+    Parameters
+    ----------
+    results : xarray.Dataset
+        Output dataset from sliding_window_MBB_ensemble_analysis().
+
+    f_pred_boot_var : str, default="F_pred_boot"
+        Bootstrap fraction predictable variance variable.
+
+    j_dim, k_dim, t_dim, boot_dim : str, optional
+        Names of group, member, temporal, and bootstrap dimensions.
+
+    j_subset : sequence or None, default=None
+        Subset of groups to plot. If None, all groups are plotted.
+
+    cmap_name : str, default="tab10"
+        Matplotlib colormap.
+
+    figsize : tuple, default=(12, 6)
+        Figure size.
+
+    xtick_step : int, default=60
+        Tick spacing in samples. For monthly data, 60 = 5 years.
+
+    ylim : tuple or None, default=(0, 1)
+        Y-axis limits. Use None to leave limits autoscaled.
+
+    save_path : str or None, default=None
+        Optional output file path. If provided, the figure is saved.
+
+    metadata : PlotMetadata or dict, optional
+        Labels for plot text.
+
+    show : bool, default=True
+        Whether to call matplotlib.pyplot.show().
+    """
+
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    if j_subset is None:
+
+        j_subset = results[j_dim].values
+
+    plot_meta = _resolve_plot_metadata(
+        results,
+        metadata=metadata,
+        time_label=time_label,
+        group_label=group_label,
+    )
+
+    # ----------------------------------------------------------
+    # Font scaling
+    # ----------------------------------------------------------
+    base_tick_size = 10
+    base_legend_size = 9
+    base_title_size = 12
+
+    tick_size = base_tick_size * 1.5
+    legend_size = base_legend_size * 2.0
+    title_size = base_title_size * 1.2
+
+    # ----------------------------------------------------------
+    # Bootstrap distribution
+    #
+    # Expected dimensions:
+    #   (time, boot, j, k)
+    # After member averaging and transpose:
+    #   (boot, j, time)
+    # ----------------------------------------------------------
+    f_pred_boot = results[f_pred_boot_var]
+
+    if k_dim in f_pred_boot.dims:
+
+        f_pred_boot = f_pred_boot.mean(dim=k_dim)
+
+    f_pred_boot = f_pred_boot.transpose(
+        boot_dim,
+        j_dim,
+        t_dim,
+    )
+
+    # ----------------------------------------------------------
+    # Figure
+    # ----------------------------------------------------------
+    fig, ax = plt.subplots(
+        figsize=figsize
+    )
+
+    cmap = plt.get_cmap(
+        cmap_name
+    )
+
+    time = results[t_dim].values
+
+    # ----------------------------------------------------------
+    # Loop over groups
+    # ----------------------------------------------------------
+    for j_index, j in enumerate(j_subset):
+
+        color = cmap(j_index)
+
+        # ------------------------------------------------------
+        # Bootstrap distribution for this group
+        # ------------------------------------------------------
+        boot_j = f_pred_boot.sel({j_dim: j})
+
+        # ------------------------------------------------------
+        # Bootstrap percentile envelopes
+        # ------------------------------------------------------
+        p05 = boot_j.quantile(
+            0.05,
+            dim=boot_dim,
+        )
+
+        p25 = boot_j.quantile(
+            0.25,
+            dim=boot_dim,
+        )
+
+        p50 = boot_j.quantile(
+            0.50,
+            dim=boot_dim,
+        )
+
+        p75 = boot_j.quantile(
+            0.75,
+            dim=boot_dim,
+        )
+
+        p95 = boot_j.quantile(
+            0.95,
+            dim=boot_dim,
+        )
+
+        # ------------------------------------------------------
+        # 90% interval
+        # ------------------------------------------------------
+        ax.fill_between(
+            time,
+            p05.values,
+            p95.values,
+            color=color,
+            alpha=0.15,
+        )
+
+        # ------------------------------------------------------
+        # 50% interval
+        # ------------------------------------------------------
+        ax.fill_between(
+            time,
+            p25.values,
+            p75.values,
+            color=color,
+            alpha=0.35,
+        )
+
+        # ------------------------------------------------------
+        # Bootstrap median
+        # ------------------------------------------------------
+        ax.plot(
+            time,
+            p50.values,
+            color=color,
+            linewidth=2.5,
+            label=f"{plot_meta.group_label}={j}",
+        )
+
+    # ----------------------------------------------------------
+    # Formatting
+    # ----------------------------------------------------------
+    ax.set_ylabel(
+        "Fraction of predictable variance",
+        fontsize=tick_size,
+    )
+
+    ax.set_xlabel(
+        plot_meta.time_label,
+        fontsize=tick_size,
+    )
+
+    ax.set_title(
+        title
+        or r"Macro-state fraction of predictable variance"
+        "\n"
+        r"(bootstrap median with 50% and 90% percentile envelopes)",
+        fontsize=title_size,
+    )
+
+    # ----------------------------------------------------------
+    # Tick spacing
+    # ----------------------------------------------------------
+    if xtick_step is not None:
+
+        tick_idx = np.arange(
+            0,
+            len(time),
+            xtick_step,
+        )
+
+        tick_times = time[tick_idx]
+
+        ax.set_xticks(
+            tick_times
+        )
+
+        ax.set_xticklabels(
+            [
+                _format_time_tick(t)
+                for t in tick_times
+            ],
+            rotation=-90,
+            ha="center",
+        )
+
+    # ----------------------------------------------------------
+    # Tick formatting
+    # ----------------------------------------------------------
+    ax.tick_params(
+        axis="both",
+        labelsize=tick_size,
+    )
+
+    # ----------------------------------------------------------
+    # Grid
+    # ----------------------------------------------------------
+    ax.grid(
+        which="major",
+        axis="x",
+        color="lightgray",
+        linewidth=1.0,
+        alpha=0.5,
+    )
+
+    ax.grid(
+        which="major",
+        axis="y",
+        color="lightgray",
+        linewidth=1.0,
+        alpha=0.5,
+    )
+
+    # ----------------------------------------------------------
+    # Legend
+    # ----------------------------------------------------------
+    ax.legend(
+        ncol=2,
+        fontsize=legend_size,
+    )
+
+    # ----------------------------------------------------------
+    # Tight axis/layout
+    # ----------------------------------------------------------
+    ax.axis("tight")
+
+    if ylim is not None:
+
+        ax.set_ylim(*ylim)
+
+    plt.tight_layout()
+
+    # ----------------------------------------------------------
+    # Optional save
+    # ----------------------------------------------------------
+    if save_path is not None:
+
+        fig.savefig(
+            save_path,
+            dpi=300,
+            bbox_inches="tight",
+        )
+
+    if show:
+
+        plt.show()
+
+    return fig, ax
+
+
 def plot_gamma_to_epsilon_snr_bootstrap_subset(
     results,
     j_subset=None,
